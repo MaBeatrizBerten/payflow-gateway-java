@@ -11,6 +11,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Optional;
@@ -35,7 +36,8 @@ class TransactionServiceTest {
     @Test
     void shouldCreateTransactionSuccessfully() {
         UUID merchantId = UUID.randomUUID();
-        CreateTransactionDTO dto = new CreateTransactionDTO(merchantId, 10000, "cliente@teste.com"); // 100 reais
+        String idempotencyKey = UUID.randomUUID().toString();
+        CreateTransactionDTO dto = new CreateTransactionDTO(merchantId, 10000, "cliente@teste.com", idempotencyKey);
 
         Merchant activeMerchant = new Merchant();
         activeMerchant.setId(merchantId);
@@ -45,8 +47,10 @@ class TransactionServiceTest {
         savedTransaction.setId(UUID.randomUUID());
         savedTransaction.setMerchant(activeMerchant);
         savedTransaction.setAmount(dto.amount());
+        savedTransaction.setIdempotencyKey(idempotencyKey);
         savedTransaction.setStatus(TransactionStatus.PENDING);
 
+        when(transactionRepository.existsByIdempotencyKey(idempotencyKey)).thenReturn(false);
         when(merchantRepository.findById(merchantId)).thenReturn(Optional.of(activeMerchant));
         when(transactionRepository.save(any(Transaction.class))).thenReturn(savedTransaction);
 
@@ -54,13 +58,30 @@ class TransactionServiceTest {
 
         assertEquals(TransactionStatus.PENDING, result.getStatus());
         assertEquals(10000, result.getAmount());
+        assertEquals(idempotencyKey, result.getIdempotencyKey());
         verify(transactionRepository, times(1)).save(any(Transaction.class));
     }
 
     @Test
-    void shouldThrowExceptionWhenMerchantNotFound() {
-        CreateTransactionDTO dto = new CreateTransactionDTO(UUID.randomUUID(), 10000, "cliente@teste.com");
+    void shouldThrowExceptionWhenIdempotencyKeyAlreadyExists() {
+        UUID merchantId = UUID.randomUUID();
+        String idempotencyKey = "chave-duplicada-123";
+        CreateTransactionDTO dto = new CreateTransactionDTO(merchantId, 10000, "cliente@teste.com", idempotencyKey);
 
+        when(transactionRepository.existsByIdempotencyKey(idempotencyKey)).thenReturn(true);
+
+        ResponseStatusException exception = assertThrows(ResponseStatusException.class, () -> service.create(dto));
+        assertEquals(HttpStatus.CONFLICT, exception.getStatusCode());
+        verify(merchantRepository, never()).findById(any());
+        verify(transactionRepository, never()).save(any(Transaction.class));
+    }
+
+    @Test
+    void shouldThrowExceptionWhenMerchantNotFound() {
+        String idempotencyKey = UUID.randomUUID().toString();
+        CreateTransactionDTO dto = new CreateTransactionDTO(UUID.randomUUID(), 10000, "cliente@teste.com", idempotencyKey);
+
+        when(transactionRepository.existsByIdempotencyKey(idempotencyKey)).thenReturn(false);
         when(merchantRepository.findById(dto.merchantId())).thenReturn(Optional.empty());
 
         assertThrows(ResponseStatusException.class, () -> service.create(dto));
@@ -70,12 +91,14 @@ class TransactionServiceTest {
     @Test
     void shouldThrowExceptionWhenMerchantIsInactive() {
         UUID merchantId = UUID.randomUUID();
-        CreateTransactionDTO dto = new CreateTransactionDTO(merchantId, 10000, "cliente@teste.com");
+        String idempotencyKey = UUID.randomUUID().toString();
+        CreateTransactionDTO dto = new CreateTransactionDTO(merchantId, 10000, "cliente@teste.com", idempotencyKey);
 
         Merchant inactiveMerchant = new Merchant();
         inactiveMerchant.setId(merchantId);
         inactiveMerchant.setActive(false);
 
+        when(transactionRepository.existsByIdempotencyKey(idempotencyKey)).thenReturn(false);
         when(merchantRepository.findById(merchantId)).thenReturn(Optional.of(inactiveMerchant));
 
         assertThrows(ResponseStatusException.class, () -> service.create(dto));

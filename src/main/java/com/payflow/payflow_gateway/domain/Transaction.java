@@ -40,4 +40,7 @@ public class Transaction {
     @UpdateTimestamp
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
+
+    @Column(name = "idempotency_key", unique = true)
+    private String idempotencyKey;
 }

@@ -11,6 +11,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.UUID;
+
 @Service
 public class TransactionService {
 
@@ -24,6 +26,11 @@ public class TransactionService {
 
     @Transactional
     public Transaction create(CreateTransactionDTO dto) {
+        // Regra de Idempotência
+        if (transactionRepository.existsByIdempotencyKey(dto.idempotencyKey())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Transação já processada (Idempotência)");
+        }
+
         Merchant merchant = merchantRepository.findById(dto.merchantId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Merchant não encontrado"));
 
@@ -35,8 +42,27 @@ public class TransactionService {
         transaction.setMerchant(merchant);
         transaction.setAmount(dto.amount());
         transaction.setCustomerEmail(dto.customerEmail());
+        transaction.setIdempotencyKey(dto.idempotencyKey());
         transaction.setStatus(TransactionStatus.PENDING);
 
+        return transactionRepository.save(transaction);
+    }
+
+    @Transactional(readOnly = true)
+    public Transaction findById(UUID id) {
+        return transactionRepository.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Transação não encontrada"));
+    }
+
+    @Transactional
+    public Transaction updateStatus(UUID id, TransactionStatus newStatus) {
+        Transaction transaction = findById(id);
+
+        if (transaction.getStatus() != TransactionStatus.PENDING) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "Apenas transações PENDING podem ter o status atualizado");
+        }
+
+        transaction.setStatus(newStatus);
         return transactionRepository.save(transaction);
     }
 }
